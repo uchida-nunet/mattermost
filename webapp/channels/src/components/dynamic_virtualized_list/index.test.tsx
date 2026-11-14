@@ -101,7 +101,7 @@ describe('DynamicVirtualizedList: centered item', () => {
             correctScrollToBottom: true,
         };
 
-        const {rerender} = render(
+        const {rerender, unmount} = render(
             <DynamicVirtualizedList
                 ref={listRef}
                 {...props}
@@ -132,6 +132,7 @@ describe('DynamicVirtualizedList: centered item', () => {
 
         return {
             listRef,
+            unmount,
             setItemData,
             getOuter: () => outer!,
             getScrollTop: () => scrollTop,
@@ -339,5 +340,107 @@ describe('DynamicVirtualizedList: centered item', () => {
 
         expect(getScrollTop()).toBe(initialScrollTop);
         expect(scrollTopWrites).not.toContain(centeredOffset((rowHeight * (itemCount - 1 - targetIndex)) + 300));
+    });
+
+    test('the held item wins over keeping the bottom while it is held', () => {
+        const {listRef, getOuter, getScrollTop, growRowAboveTarget} = setup();
+        const scrollToBottom = jest.spyOn(listRef.current!, '_scrollToBottom');
+
+        // The list is scrolled to the very bottom, so that a measurement would normally keep the bottom
+        getOuter().scrollTop = 100000;
+        growRowAboveTarget(rowHeight + 300);
+        act(() => {
+            jest.advanceTimersByTime(200);
+        });
+
+        expect(scrollToBottom).not.toHaveBeenCalled();
+        expect(getScrollTop()).toBe(centeredOffset((rowHeight * (itemCount - 1 - targetIndex)) + 300));
+    });
+
+    test('keeps the bottom once the item is no longer held', () => {
+        const {listRef, getOuter, growRowAboveTarget} = setup();
+        const scrollToBottom = jest.spyOn(listRef.current!, '_scrollToBottom');
+
+        act(() => {
+            jest.advanceTimersByTime(31000);
+        });
+        getOuter().scrollTop = 100000;
+        growRowAboveTarget(rowHeight + 300);
+
+        expect(scrollToBottom).toHaveBeenCalled();
+    });
+
+    test('re-centers the held item when the height of the list changes', () => {
+        const {listRef, getOuter, getScrollTop} = setup();
+        const scrollToBottom = jest.spyOn(listRef.current!, '_scrollToBottom');
+
+        // The list was at the bottom before the height changed
+        getOuter().scrollTop = 0;
+        act(() => {
+            listRef.current!._heightChange(listHeight, Number.MAX_SAFE_INTEGER);
+            jest.advanceTimersByTime(200);
+        });
+
+        expect(scrollToBottom).not.toHaveBeenCalled();
+        expect(getScrollTop()).toBe(centeredOffset(rowHeight * (itemCount - 1 - targetIndex)));
+    });
+
+    test('re-centers the held item when the width of the list changes', () => {
+        const {listRef, getOuter, getScrollTop} = setup();
+        const scrollToBottom = jest.spyOn(listRef.current!, '_scrollToBottom');
+
+        getOuter().scrollTop = 0;
+        act(() => {
+            listRef.current!._widthChange(listHeight, Number.MAX_SAFE_INTEGER);
+            jest.advanceTimersByTime(200);
+        });
+
+        expect(scrollToBottom).not.toHaveBeenCalled();
+        expect(getScrollTop()).toBe(centeredOffset(rowHeight * (itemCount - 1 - targetIndex)));
+    });
+
+    test('keeps the item centered when a new message arrives and the item is far from the bottom', () => {
+        const {listRef, setItemData} = setup();
+
+        act(() => {
+            setItemData(['item-new', ...itemData]);
+        });
+
+        expect(listRef.current!._isCenteredItemHeld()).toBe(true);
+        expect(listRef.current!._getHeldItemIndex()).toBe(targetIndex + 1);
+    });
+
+    test('releases the hold when a new message arrives and the item is one of the newest', () => {
+        const {listRef, setItemData} = setup();
+
+        act(() => {
+            listRef.current!.scrollToItem(1, 'center');
+        });
+        expect(listRef.current!._isCenteredItemHeld()).toBe(true);
+
+        act(() => {
+            setItemData(['item-new', ...itemData]);
+        });
+
+        expect(listRef.current!._isCenteredItemHeld()).toBe(false);
+    });
+
+    test('does not re-center and removes its listeners when the list is unmounted', () => {
+        const {getOuter, getScrollTop, unmount, growRowAboveTarget} = setup();
+        const removeEventListener = jest.spyOn(getOuter(), 'removeEventListener');
+        const scrollTopBefore = getScrollTop();
+
+        // A re-center is pending
+        growRowAboveTarget(rowHeight + 300);
+        unmount();
+        act(() => {
+            jest.advanceTimersByTime(200);
+        });
+
+        expect(getScrollTop()).toBe(scrollTopBefore);
+        expect(jest.getTimerCount()).toBe(0);
+        ['wheel', 'touchstart', 'mousedown', 'keydown'].forEach((eventName) => {
+            expect(removeEventListener).toHaveBeenCalledWith(eventName, expect.any(Function));
+        });
     });
 });
